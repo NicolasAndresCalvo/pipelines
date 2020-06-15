@@ -1,0 +1,151 @@
+pipeline {
+    agent {
+        label {
+            label ""
+            customWorkspace "/var/lib/jenkins/jobs/projectname_environment_country/"
+        }
+    }
+	environment {
+		local_xml="integration.local.xml"
+		user = currentBuild.rawBuild.getCause(Cause.UserIdCause).getUserName()
+	}
+	stages {
+	    stage('Start') {
+			steps {
+				slackSend baseUrl: 'https://enhanceit.slack.com/services/hooks/jenkins-ci/', color: "good", failOnError: true, message: "${JOB_BASE_NAME} - #${BUILD_NUMBER} -BRANCH: develop -  Started by user ${USER} (<${RUN_DISPLAY_URL}|Open>)", teamDomain: 'enhanceit', token: '123456789'
+			}
+		}
+		stage('Build') {
+			steps {
+				git(credentialsId: '123456789-123456789-123456789-123456789-123456789', url: 'git@bitbucket.org:enhanceitdev/projectname.git', branch: "master")
+				sh label: '#### Dotnet Restore####', script: """
+				  cd ${WORKSPACE}/1.Presentation/enhanceit.projectNameCommon.Configuration/
+				  /var/lib/jenkins/dotnet300/dotnet tool restore
+				  /var/lib/jenkins/dotnet300/dotnet ef migrations script -s enhanceit.projectNameCommon.Configuration.csproj -o Migrations/scripts.sql -i
+				  
+				"""
+				sh label: '#### Dotnet Publish ####', script: """
+				  cd ${WORKSPACE}/path
+				  /var/lib/jenkins/dotnet300/dotnet publish enhanceit.projectNameWeb.csproj -c "Release" -r linux-musl-x64 -o site
+				"""
+				sh label: '#### Docker registry Login ####', script: """
+				  cd ${WORKSPACE}/path
+				  aws_login=\$(aws ecr get-login --region us-east-1 --no-include-email);
+				  \$aws_login
+				"""
+				sh label: '#### Docker Build ####', script: """
+				  cd ${WORKSPACE}/path
+				  docker build -t tag --build-arg environment=environment .
+				"""			
+				sh label: '#### Docker Tag ####', script: """
+				  cd ${WORKSPACE}/path
+				  docker tag tag:latest 123456789.dkr.ecr.us-east-1.amazonaws.com/merchant-prod-ecr:latest
+				"""
+				sh label: '#### Docker push image to repository ####', script: """
+				  cd ${WORKSPACE}/path
+				  docker push 123456789.dkr.ecr.us-east-1.amazonaws.com/merchant-prod-ecr:latest
+				"""
+			}
+			post {
+				failure {
+					slackSend baseUrl: 'https://enhanceit.slack.com/services/hooks/jenkins-ci/', color: "danger", message: "${JOB_BASE_NAME} - #${BUILD_NUMBER} - Failure after ${currentBuild.durationString.replace(' and counting', '')} (<${RUN_DISPLAY_URL}|Open>)", teamDomain: 'enhanceit', token: '123456789'
+				}
+				unstable {
+					slackSend baseUrl: 'https://enhanceit.slack.com/services/hooks/jenkins-ci/', color: "warning", message: "${JOB_BASE_NAME} - #${BUILD_NUMBER} - Unstable after ${currentBuild.durationString.replace(' and counting', '')} (<${RUN_DISPLAY_URL}|Open>)", teamDomain: 'enhanceit', token: '123456789'
+				}
+				aborted {
+						slackSend baseUrl: 'https://enhanceit.slack.com/services/hooks/jenkins-ci/', color: '#A9A9A9', message: "${JOB_BASE_NAME} - #${BUILD_NUMBER} - Aborted after ${currentBuild.durationString.replace(' and counting', '')} by user ${USER} (<${RUN_DISPLAY_URL}|Open>)", teamDomain: 'enhanceit', token: '123456789'
+				}
+			}
+		}
+        stage('Deploy') {   
+			steps {
+				sh label: '#### Update Task Definition with Latest Image ####', script: """
+					cd ${WORKSPACE}/path
+					aws ecs register-task-definition --family "project-name-task" --cli-input-json file://task-definition.json --requires-compatibilities "FARGATE" --network-mode "awsvpc" --execution-role-arn "arn:aws:iam::123456789:role/ecsTaskExecutionRole" --cpu "256" --memory "512"
+				"""
+				sh label: '#### Update Service ####', script: """
+					cd ${WORKSPACE}/path
+					aws ecs update-service --cluster "ProjectNameCluster" --service "project-name-service" --task-definition "project-name-task" --force-new-deployment
+				"""
+			}
+			post {
+				failure {
+					slackSend baseUrl: 'https://enhanceit.slack.com/services/hooks/jenkins-ci/', color: "danger", message: "${JOB_BASE_NAME} - #${BUILD_NUMBER} - Failure after ${currentBuild.durationString.replace(' and counting', '')} (<${RUN_DISPLAY_URL}|Open>)", teamDomain: 'enhanceit', token: '123456789'
+				}
+				unstable {
+					slackSend baseUrl: 'https://enhanceit.slack.com/services/hooks/jenkins-ci/', color: "warning", message: "${JOB_BASE_NAME} - #${BUILD_NUMBER} - Unstable after ${currentBuild.durationString.replace(' and counting', '')} (<${RUN_DISPLAY_URL}|Open>)", teamDomain: 'enhanceit', token: '123456789'
+				}
+				aborted {
+						slackSend baseUrl: 'https://enhanceit.slack.com/services/hooks/jenkins-ci/', color: '#A9A9A9', message: "${JOB_BASE_NAME} - #${BUILD_NUMBER} - Aborted after ${currentBuild.durationString.replace(' and counting', '')} by user ${USER} (<${RUN_DISPLAY_URL}|Open>)", teamDomain: 'enhanceit', token: '123456789'
+				}
+			}
+		}
+		stage('Post-Deploy') {   
+			steps {
+				sh label: '#### SQL Script Execution ####', script: """
+				  sleep 30
+				  cd ${WORKSPACE}/1.Presentation/enhanceit.projectNameCommon.Configuration/Migrations/
+				  /opt/mssql-tools/bin/sqlcmd -S "database.server.enhanceit.com" -U "AmazonAPIUserEnvironment" -P "123456789" -d "enhanceit.DB.Environment" -i "scripts.sql" -b
+				"""
+			}
+			post {
+				failure {
+					slackSend baseUrl: 'https://enhanceit.slack.com/services/hooks/jenkins-ci/', color: "danger", message: "${JOB_BASE_NAME} - #${BUILD_NUMBER} - Failure after ${currentBuild.durationString.replace(' and counting', '')} (<${RUN_DISPLAY_URL}|Open>)", teamDomain: 'enhanceit', token: '123456789'
+				}
+				unstable {
+					slackSend baseUrl: 'https://enhanceit.slack.com/services/hooks/jenkins-ci/', color: "warning", message: "${JOB_BASE_NAME} - #${BUILD_NUMBER} - Unstable after ${currentBuild.durationString.replace(' and counting', '')} (<${RUN_DISPLAY_URL}|Open>)", teamDomain: 'enhanceit', token: '123456789'
+				}
+				aborted {
+						slackSend baseUrl: 'https://enhanceit.slack.com/services/hooks/jenkins-ci/', color: '#A9A9A9', message: "${JOB_BASE_NAME} - #${BUILD_NUMBER} - Aborted after ${currentBuild.durationString.replace(' and counting', '')} by user ${USER} (<${RUN_DISPLAY_URL}|Open>)", teamDomain: 'enhanceit', token: '123456789'
+				}
+			}
+		}
+		stage('Health Check') {   
+			steps {
+				sleep 60
+				sh label: '#### Health Check ####', script: """
+					while [ \$(aws ecs list-tasks --cluster "ProjectNameCluster" --query "taskArns" | wc -l) -ne 3 ];do tasks=\$(aws ecs list-tasks --cluster "ProjectNameCluster" --query "taskArns" --output text) && actualtask=\$(aws ecs describe-tasks --cluster "ProjectNameCluster" --task "\$tasks" --query "tasks[].taskDefinitionArn" --output text); done
+					tasks=\$(aws ecs list-tasks --cluster "ProjectNameCluster" --query "taskArns" --output text)
+					actualtask=\$(aws ecs describe-tasks --cluster "ProjectNameCluster" --task "\$tasks" --query "tasks[].taskDefinitionArn" --output text | awk -F ":" '{print \$7}')
+					actualservice=\$(aws ecs describe-services --cluster "ProjectNameCluster" --services "project-name-service" --query "services[].taskDefinition" --output text | awk -F ":" '{print \$7}')
+					if [ \$actualservice -eq \$actualtask ];then exit=0; else sh 'false'; fi
+				"""
+			}
+			post {
+				failure {
+					slackSend baseUrl: 'https://enhanceit.slack.com/services/hooks/jenkins-ci/', color: "danger", message: "${JOB_BASE_NAME} - #${BUILD_NUMBER} - Failure after ${currentBuild.durationString.replace(' and counting', '')} (<${RUN_DISPLAY_URL}|Open>)", teamDomain: 'enhanceit', token: '123456789'
+				}
+				unstable {
+					slackSend baseUrl: 'https://enhanceit.slack.com/services/hooks/jenkins-ci/', color: "warning", message: "${JOB_BASE_NAME} - #${BUILD_NUMBER} - Unstable after ${currentBuild.durationString.replace(' and counting', '')} (<${RUN_DISPLAY_URL}|Open>)", teamDomain: 'enhanceit', token: '123456789'
+				}
+				aborted {
+						slackSend baseUrl: 'https://enhanceit.slack.com/services/hooks/jenkins-ci/', color: '#A9A9A9', message: "${JOB_BASE_NAME} - #${BUILD_NUMBER} - Aborted after ${currentBuild.durationString.replace(' and counting', '')} by user ${USER} (<${RUN_DISPLAY_URL}|Open>)", teamDomain: 'enhanceit', token: '123456789'
+				}
+			}
+		}
+		stage('End') {
+			steps {
+				echo "SUCCESS"
+				script {
+                    currentBuild.displayName = "#${BUILD_NUMBER}"
+                    currentBuild.description = "BRANCH: master\n USER: ${USER}"
+                }
+			}
+			post {
+				success {
+					slackSend baseUrl: 'https://enhanceit.slack.com/services/hooks/jenkins-ci/', color: "good", message: "${JOB_BASE_NAME} - #${BUILD_NUMBER} - Success after ${currentBuild.durationString.replace(' and counting', '')} (<${RUN_DISPLAY_URL}|Open>)", teamDomain: 'enhanceit', token: '123456789'
+				}
+				failure {
+					slackSend baseUrl: 'https://enhanceit.slack.com/services/hooks/jenkins-ci/', color: "danger", message: "${JOB_BASE_NAME} - #${BUILD_NUMBER} - Failure after ${currentBuild.durationString.replace(' and counting', '')} (<${RUN_DISPLAY_URL}|Open>)", teamDomain: 'enhanceit', token: '123456789'
+				}
+				unstable {
+					slackSend baseUrl: 'https://enhanceit.slack.com/services/hooks/jenkins-ci/', color: "warning", message: "${JOB_BASE_NAME} - #${BUILD_NUMBER} - Unstable after ${currentBuild.durationString.replace(' and counting', '')} (<${RUN_DISPLAY_URL}|Open>)", teamDomain: 'enhanceit', token: '123456789'
+				}
+				aborted {
+						slackSend baseUrl: 'https://enhanceit.slack.com/services/hooks/jenkins-ci/', color: '#A9A9A9', message: "${JOB_BASE_NAME} - #${BUILD_NUMBER} - Aborted after ${currentBuild.durationString.replace(' and counting', '')} by user ${USER} (<${RUN_DISPLAY_URL}|Open>)", teamDomain: 'enhanceit', token: '123456789'
+				}
+			}
+		}
+	}   
+}

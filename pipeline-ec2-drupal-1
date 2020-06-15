@@ -1,0 +1,88 @@
+pipeline {
+    agent {
+        label {
+            label ""
+        }
+    }
+	parameters {
+		choice(name: 'GIT_BRANCH_NAME', choices: ['master','develop'], description: 'Set the branch vesion to deploy')
+    }
+	environment {
+		user = currentBuild.rawBuild.getCause(Cause.UserIdCause).getUserName()
+		repoHome="/var/www/enhanceitnewsD/"
+	}
+	stages {
+	    stage('Start') {
+			steps {
+				slackSend baseUrl: 'https://enhanceit.slack.com/services/hooks/jenkins-ci/', color: "good", failOnError: true, message: "${JOB_NAME} - #${BUILD_NUMBER} - Branch: ${params.GIT_BRANCH_NAME} - Started by user ${USER} (<${RUN_DISPLAY_URL}|Open>)", teamDomain: 'enhanceit', token: '123456789'
+				sh label: '#### Check Healthy Instances ####', script: """
+				  ansible -i inventoryPath ansibleLabel -m shell -a 'echo Ready to Deploy' -u ec2-user
+				"""
+			}
+			post {
+				failure {
+					slackSend baseUrl: 'https://enhanceit.slack.com/services/hooks/jenkins-ci/', color: "danger", message: "${JOB_NAME} - #${BUILD_NUMBER} - Failure after ${currentBuild.durationString.replace(' and counting', '')} on START Step (<${RUN_DISPLAY_URL}|Open>)", teamDomain: 'enhanceit', token: '123456789'
+				}
+				unstable {
+					slackSend baseUrl: 'https://enhanceit.slack.com/services/hooks/jenkins-ci/', color: "warning", message: "${JOB_NAME} - #${BUILD_NUMBER} - Unstable after ${currentBuild.durationString.replace(' and counting', '')} on START Step (<${RUN_DISPLAY_URL}|Open>)", teamDomain: 'enhanceit', token: '123456789'
+				}
+				aborted {
+						slackSend baseUrl: 'https://enhanceit.slack.com/services/hooks/jenkins-ci/', color: '#A9A9A9', message: "${JOB_NAME} - #${BUILD_NUMBER} - Aborted after ${currentBuild.durationString.replace(' and counting', '')} on START Step by user ${USER} (<${RUN_DISPLAY_URL}|Open>)", teamDomain: 'enhanceit', token: '123456789'
+				}
+			}
+		}
+		stage('Build') {
+			steps {
+				sh label: '#### git reset - GIT  ####', script: """
+                    ansible -i inventoryPath ansibleLabel -m shell -a 'cd ${repoHome} && git reset --hard HEAD' -u ec2-user
+				"""
+				sh label: '#### git fetch - GIT  ####', script: """
+                    ansible -i inventoryPath ansibleLabel -m shell -a 'cd ${repoHome} && git fetch --all' -u ec2-user
+				"""
+				sh label: '#### git checkout - GIT  ####', script: """
+                    ansible -i inventoryPath ansibleLabel -m shell -a 'cd ${repoHome} && git checkout ${params.GIT_BRANCH_NAME}' -u ec2-user
+				"""
+				sh label: '#### git pull - GIT  ####', script: """
+                    ansible -i inventoryPath ansibleLabel -m shell -a 'cd ${repoHome} && git pull --rebase' -u ec2-user
+				"""
+				sh label: '#### git pull - GIT  ####', script: """
+                    ansible -i inventoryPath ansibleLabel -m shell -a 'cd ${repoHome}/sites/default && mv dev.database.inc database.inc' -u ec2-user
+				"""
+			}
+			post {
+				failure {
+					slackSend baseUrl: 'https://enhanceit.slack.com/services/hooks/jenkins-ci/', color: "danger", message: "${JOB_NAME} - #${BUILD_NUMBER} - Failure after ${currentBuild.durationString.replace(' and counting', '')} on BUILD Step (<${RUN_DISPLAY_URL}|Open>)", teamDomain: 'enhanceit', token: '123456789'
+				}
+				unstable {
+					slackSend baseUrl: 'https://enhanceit.slack.com/services/hooks/jenkins-ci/', color: "warning", message: "${JOB_NAME} - #${BUILD_NUMBER} - Unstable after ${currentBuild.durationString.replace(' and counting', '')} on BUILD Step (<${RUN_DISPLAY_URL}|Open>)", teamDomain: 'enhanceit', token: '123456789'
+				}
+				aborted {
+						slackSend baseUrl: 'https://enhanceit.slack.com/services/hooks/jenkins-ci/', color: '#A9A9A9', message: "${JOB_NAME} - #${BUILD_NUMBER} - Aborted after ${currentBuild.durationString.replace(' and counting', '')} on BUILD Step by user ${USER} (<${RUN_DISPLAY_URL}|Open>)", teamDomain: 'enhanceit', token: '123456789'
+				}
+			}
+		}
+		stage('End') {
+			steps {
+				echo "SUCCESS"
+				script {
+                    currentBuild.displayName = "#${BUILD_NUMBER}"
+                    currentBuild.description = "Branch: ${params.GIT_BRANCH_NAME}\n USER: ${USER}"
+                }
+			}
+			post {
+				success {
+					slackSend baseUrl: 'https://enhanceit.slack.com/services/hooks/jenkins-ci/', color: "good", message: "${JOB_NAME} - #${BUILD_NUMBER} - Success after ${currentBuild.durationString.replace(' and counting', '')} (<${RUN_DISPLAY_URL}|Open>)", teamDomain: 'enhanceit', token: '123456789'
+				}
+				failure {
+					slackSend baseUrl: 'https://enhanceit.slack.com/services/hooks/jenkins-ci/', color: "danger", message: "${JOB_NAME} - #${BUILD_NUMBER} - Failure after ${currentBuild.durationString.replace(' and counting', '')} (<${RUN_DISPLAY_URL}|Open>)", teamDomain: 'enhanceit', token: '123456789'
+				}
+				unstable {
+					slackSend baseUrl: 'https://enhanceit.slack.com/services/hooks/jenkins-ci/', color: "warning", message: "${JOB_NAME} - #${BUILD_NUMBER} - Unstable after ${currentBuild.durationString.replace(' and counting', '')} (<${RUN_DISPLAY_URL}|Open>)", teamDomain: 'enhanceit', token: '123456789'
+				}
+				aborted {
+						slackSend baseUrl: 'https://enhanceit.slack.com/services/hooks/jenkins-ci/', color: '#A9A9A9', message: "${JOB_NAME} - #${BUILD_NUMBER} - Aborted after ${currentBuild.durationString.replace(' and counting', '')} by user ${USER} (<${RUN_DISPLAY_URL}|Open>)", teamDomain: 'enhanceit', token: '123456789'
+				}
+			}
+		}
+	}   
+}

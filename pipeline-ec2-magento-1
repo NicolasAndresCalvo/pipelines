@@ -1,0 +1,464 @@
+pipeline {
+    agent {
+        label {
+            label ""
+        }
+    }
+	parameters {
+		string(name: 'TAG', defaultValue: '', description: 'TAG to MAGENTO')
+		booleanParam(name: 'AllowMinification', defaultValue: true, description: 'Enable the CSS/JS minification')
+		booleanParam(name: 'DEPLOY_SL', defaultValue: false, description: 'Allow Deploy to Services Layer')
+		string(name: 'TAG_SL', defaultValue: '', description: 'TAG to SERVICES LAYER')
+		string(name: 'CSSJS_VERSION', defaultValue: '4611', description: 'Version of CSS & JS')
+		string(name: 'CSSJS_VERSION_2', defaultValue: '46111', description: 'Version of CSS & JS')
+    }
+	environment {
+		s3bucketname = "amazonapi-deployments"
+		s3key = "key/key2"
+		repoHome="path/magento"
+		rootWebDocument="path/html"
+		nginxPath="path"
+		cachePath="path/html/var/cache"
+		dirrepo_dartsass="path/html"
+		toolsPath="/var/lib/jenkins/jobs/minification"
+		toolsPath_media="path/tools"
+		instanceID="i-id"
+		imageName="name"
+		hosted_zone_id_route53="123456789"
+		dns_primary="enhanceit.com.ar"
+		dns_secondary="www.enhanceit.com.ar"
+		landing_dns="name.cloudfront.net"
+		landing_aliashostedzoneid="123456789"
+		lb_dns="enhanceit.us-east-1.elb.amazonaws.com"
+		lb_aliashostedzoneid="123456789"
+		instance_type="type"
+		key_name="key"
+		security_group_ids='"sg-id"'
+		cloudwatch_alarm_1="name"
+		cloudwatch_alarm_2="name"
+		autoscaling_group="name"
+		launchtemplatename="name"
+		vpczoneidentifier="subnet-id"
+		launch_template_id="lt-id"
+		distributionid_cdn_profesionales="123456789"
+		distributionid_cdn_mantenimiento="123456789"
+		local_xml="local.xml"
+		ansible_host="name"
+		ansible_host_deploy_block_one="name"
+		ansible_host_deploy_block_two="name"
+		ansible_host_deploy="name"
+	}
+	stages {
+	    stage('Start') {
+			steps {
+				slackSend baseUrl: 'https://enhanceit.slack.com/services/hooks/jenkins-ci/', color: "good", failOnError: true, message: "${JOB_NAME} - #${BUILD_NUMBER} - TAG: ${params.TAG} - Started by user ${USER} (<${RUN_DISPLAY_URL}|Open>)", teamDomain: 'enhanceit', token: '123456789'
+				slackSend baseUrl: 'https://enhanceit.slack.com/services/hooks/jenkins-ci/', channel: 'name-channel', color: "good", failOnError: true, message: "INICIO Pasaje a Produccion - country (Magento & SL) - TAG: ${params.TAG} - (<${RUN_DISPLAY_URL}|Open_Pipeline>)", teamDomain: 'enhanceit', token: '123456789'
+				sh label: '#### Check Healthy Instances ####', script: """
+				    ansible -i inventory ${ansible_host_deploy_block_one} -m shell -a 'echo Ready to Deploy' -u ec2-user
+				    ansible -i inventory ${ansible_host_deploy_block_two} -m shell -a 'echo Ready to Deploy' -u ec2-user
+				    ansible -i inventory ansibleLabel -m shell -a "cat /dev/null >path/html/var/log/system.log" -u ec2-user -s
+				    ansible -i inventory prod_country_two -m shell -a "cat /dev/null >path/html/var/log/system.log" -u ec2-user -s
+				 """
+			}
+			post {
+				failure {
+					slackSend baseUrl: 'https://enhanceit.slack.com/services/hooks/jenkins-ci/', color: "danger", message: "${JOB_NAME} - #${BUILD_NUMBER} - Failure after ${currentBuild.durationString.replace(' and counting', '')} on START Step (<${RUN_DISPLAY_URL}|Open>)", teamDomain: 'enhanceit', token: '123456789'
+				}
+				unstable {
+					slackSend baseUrl: 'https://enhanceit.slack.com/services/hooks/jenkins-ci/', color: "warning", message: "${JOB_NAME} - #${BUILD_NUMBER} - Unstable after ${currentBuild.durationString.replace(' and counting', '')} on START Step (<${RUN_DISPLAY_URL}|Open>)", teamDomain: 'enhanceit', token: '123456789'
+				}
+				aborted {
+					slackSend baseUrl: 'https://enhanceit.slack.com/services/hooks/jenkins-ci/', color: '#A9A9A9', message: "${JOB_NAME} - #${BUILD_NUMBER} - Aborted after ${currentBuild.durationString.replace(' and counting', '')} on START Step by user ${USER} (<${RUN_DISPLAY_URL}|Open>)", teamDomain: 'enhanceit', token: '123456789'
+				}
+			}
+		}
+		stage('Build') {
+			steps {
+				checkout([$class: 'GitSCM',
+                          branches: [[name: "${params.TAG}"]],
+                          doGenerateSubmoduleConfigurations: false,
+                          extensions: [],
+                          gitTool: 'Default',
+                          submoduleCfg: [],
+                          userRemoteConfigs: [[url: 'git@bitbucket.org:enhanceitdev/enhanceit.git']]
+                ])
+				script { if (params.AllowMinification == true) {
+							sh label: '#### First Script Minification - CSS JS ####', script: """
+									sh ${toolsPath}/minification-script.sh "${WORKSPACE}/htdocs"
+							"""
+						} else {
+							sh label: '#### Second Script ####', script: """
+									echo 'usage: The minification process is not allowed in that instance.'
+							"""
+						}}
+				sh label: '#### Compress Package Version ####', script: """
+				  cd ${WORKSPACE}
+				  tar -czf JenkinsJob_${JOB_BASE_NAME}_Run_${BUILD_NUMBER}_Branch_${params.TAG}.tar.gz htdocs/ scripts/ .gitignore
+				"""
+				sh label: '#### Upload Package to S3 ####', script: """
+				  aws s3 cp ${WORKSPACE}/JenkinsJob_${JOB_BASE_NAME}_Run_${BUILD_NUMBER}_Branch_${params.TAG}.tar.gz s3://${s3bucketname}/${s3key}/JenkinsJob_${JOB_BASE_NAME}_Run_${BUILD_NUMBER}_Branch_${params.TAG}.tar.gz
+				"""
+				sh label: '#### Remove Package from source ####', script: """
+				  rm -f ${WORKSPACE}/JenkinsJob_${JOB_BASE_NAME}_Run_${BUILD_NUMBER}_Branch_${params.TAG}.tar.gz
+				"""
+			}
+			post {
+				failure {
+					slackSend baseUrl: 'https://enhanceit.slack.com/services/hooks/jenkins-ci/', color: "danger", message: "${JOB_NAME} - #${BUILD_NUMBER} - Failure after ${currentBuild.durationString.replace(' and counting', '')} on BUILD Step (<${RUN_DISPLAY_URL}|Open>)", teamDomain: 'enhanceit', token: '123456789'
+				}
+				unstable {
+					slackSend baseUrl: 'https://enhanceit.slack.com/services/hooks/jenkins-ci/', color: "warning", message: "${JOB_NAME} - #${BUILD_NUMBER} - Unstable after ${currentBuild.durationString.replace(' and counting', '')} on BUILD Step (<${RUN_DISPLAY_URL}|Open>)", teamDomain: 'enhanceit', token: '123456789'
+				}
+				aborted {
+						slackSend baseUrl: 'https://enhanceit.slack.com/services/hooks/jenkins-ci/', color: '#A9A9A9', message: "${JOB_NAME} - #${BUILD_NUMBER} - Aborted after ${currentBuild.durationString.replace(' and counting', '')} on BUILD Step by user ${USER} (<${RUN_DISPLAY_URL}|Open>)", teamDomain: 'enhanceit', token: '123456789'
+				}
+			}
+		}
+		stage('Pre Deploy AWS') {
+			steps {
+				sh label: '#### Raise new EC2 with min 3 max 4 - Auto Scaling Group  ####', script: """
+					aws autoscaling update-auto-scaling-group --auto-scaling-group-name ${autoscaling_group} --launch-template '{"LaunchTemplateName": "${launchtemplatename}","Version": "\$Latest"}' --min-size 8 --max-size 8 --desired-capacity 8 --vpc-zone-identifier ${vpczoneidentifier}
+				"""
+				sleep 260
+				sh label: '#### Check Healthy Instances ####', script: """
+					ansible -i inventory ${ansible_host_deploy} -m shell -a 'echo Ready to Deploy' -u ec2-user
+				"""
+				sh label: '#### Stop Nginx ####', script: """
+					ansible -i inventory ${ansible_host_deploy} -m shell -a 'if [ -f path/logs/nginx.pid ]; then sudo path/sbin/nginx -s stop && sudo rm -rf /var/ngx_pagespeed_cache/*; fi' -u ec2-user
+				"""
+				sh label: '#### Disable Alarms Post Deploy - Route 53  ####', script: """
+                    aws cloudwatch disable-alarm-actions --alarm-names ${cloudwatch_alarm_1} ${cloudwatch_alarm_2}
+				"""
+				sh label: '#### Suspend Scaling Policies - Auto Scaling Group  ####', script: """
+					aws autoscaling suspend-processes --auto-scaling-group-name ${autoscaling_group} --scaling-processes AlarmNotification
+				"""
+				sh label: '#### Download Package from S3 ####', script: """
+					ansible -i inventory ${ansible_host_deploy} -a 'aws s3 cp s3://${s3bucketname}/${s3key}/JenkinsJob_${JOB_BASE_NAME}_Run_${BUILD_NUMBER}_Branch_${params.TAG}.tar.gz ${repoHome}/JenkinsJob_${JOB_BASE_NAME}_Run_${BUILD_NUMBER}_Branch_${params.TAG}.tar.gz' -u ec2-user
+				"""
+				sh label: '#### Uncompress Package ####', script: """
+					ansible -i inventory ${ansible_host_deploy} -a 'tar -xvzf ${repoHome}/JenkinsJob_${JOB_BASE_NAME}_Run_${BUILD_NUMBER}_Branch_${params.TAG}.tar.gz -C ${repoHome}/' -u ec2-user
+				"""
+				sh label: '#### Remove Package from destination ####', script: """
+					ansible -i inventory ${ansible_host_deploy} -a 'rm -f ${repoHome}/JenkinsJob_${JOB_BASE_NAME}_Run_${BUILD_NUMBER}_Branch_${params.TAG}.tar.gz' -u ec2-user
+				"""
+				sh label: '#### Delete Folders ####', script: """
+				  ansible -i inventory ${ansible_host_deploy} -m shell -a 'cd ${rootWebDocument} && if [ -d app ]; then rm -rf app; fi && if [ -d downloader ]; then rm -rf downloader; fi && if [ -d images ]; then rm -rf images; fi && if [ -d includes ]; then rm -rf includes; fi && if [ -d js ]; then rm -rf js; fi && if [ -d lib ]; then rm -rf lib; fi && if [ -d shell ]; then rm -rf shell; fi && if [ -d skin ]; then rm -rf skin; fi' -u ec2-user
+				"""
+				sh label: '#### Copy from Magento to Html ####', script: """
+				  ansible -i inventory ${ansible_host_deploy} -m shell -a 'cp -a ${repoHome}/htdocs/. ${rootWebDocument}' -u ec2-user
+				"""
+				sh label: '#### Copy Config ####', script: """
+				  ansible -i inventory ${ansible_host_deploy} -m shell -a 'cp ${nginxPath}/localconfigs/${local_xml} ${rootWebDocument}/app/etc/local.xml' -u ec2-user
+				"""
+				sh label: '#### Delete Cache ####', script: """
+				  ansible -i inventory ${ansible_host_deploy} -m shell -a 'if [ -d ${cachePath} ]; then cd ${cachePath} && rm -rf ./*; fi' -u ec2-user
+				"""
+				sh label: '#### Change Permissions ####', script: """
+				  ansible -i inventory ${ansible_host_deploy} -m shell -a 'chmod 755 ${rootWebDocument}/cron.php && chmod 755 ${rootWebDocument}/cron.sh && sudo chmod +x ${rootWebDocument}/cron.php && sudo chmod +x ${rootWebDocument}/cron.sh' -u ec2-user
+				"""
+				sh label: '#### First Script Minification - Dart-Sass ####', script: """
+				  ansible -i inventory ${ansible_host_deploy} -m shell -a 'sh ${toolsPath_media}/dart-sass-script.sh ${dirrepo_dartsass}' -u ec2-user
+				"""
+				script { if (params.AllowMinification == true) {
+							sh label: '#### Second Script Minification - JS ####', script: """
+									ansible -i inventory ${ansible_host_deploy} -m shell -a 'sh ${toolsPath_media}/minification-script-js.sh' -u ec2-user
+							"""
+							sh label: '#### Third Script Minification - CSS ####', script: """
+									ansible -i inventory ${ansible_host_deploy} -m shell -a 'sh ${toolsPath_media}/minification-script-css.sh' -u ec2-user
+							"""
+							sh label: '#### Second Script ####', script: """
+									echo 'usage: The minification process is not allowed in that instance.'
+							"""
+						} else {
+							sh label: '#### Second Script ####', script: """
+									echo 'usage: The minification process is not allowed in that instance.'
+							"""
+						}}
+				sh label: '#### Clean Cache - CSS & JS ####', script: """
+				  ansible -i inventory ${ansible_host_deploy} -m shell -a 'sudo rm -f path/html/media/css_secure/* ; sudo rm -f path/html/media/js/*' -u ec2-user
+				"""
+				sh label: '#### Compress Package Version CSS - JS - DartSass ####', script: """
+				  ansible -i inventory ${ansible_host_deploy} -m shell -a 'cd path/html/skin/ && tar -czf JenkinsJob_${JOB_BASE_NAME}_Run_${BUILD_NUMBER}_Branch_${params.TAG}_CSS_JS.tar.gz frontend/' -u ec2-user
+				"""
+				sh label: '#### Upload Package CSS - JS - DartSass to S3 ####', script: """
+				  ansible -i inventory ${ansible_host_deploy} -a 'aws s3 cp path/html/skin/JenkinsJob_${JOB_BASE_NAME}_Run_${BUILD_NUMBER}_Branch_${params.TAG}_CSS_JS.tar.gz s3://${s3bucketname}/${s3key}/JenkinsJob_${JOB_BASE_NAME}_Run_${BUILD_NUMBER}_Branch_${params.TAG}_CSS_JS.tar.gz' -u ec2-user
+				"""
+				sh label: '#### Remove Package CSS - JS - DartSass from source ####', script: """
+				  ansible -i inventory ${ansible_host_deploy} -a 'rm -f path/html/skin/JenkinsJob_${JOB_BASE_NAME}_Run_${BUILD_NUMBER}_Branch_${params.TAG}_CSS_JS.tar.gz' -u ec2-user
+				"""
+				sh label: '#### Stop Instance - Wait for stopping EC2 Get Version - Create Image AMI - Set Tags to AMI - Create JSON Launch Template - Create new launch template version - Wait for AMI be ready  ####', script: '''
+					deployinstanceid=$(aws autoscaling describe-scaling-activities --auto-scaling-group-name ${autoscaling_group} --max-items 1 --query Activities[].Description --output text | grep "instance" | awk -F'instance: ' '{print $2}')
+					aws ec2 stop-instances --instance-ids $deployinstanceid
+					sleep 180
+					while state=$(aws ec2 describe-instances --instance-ids $deployinstanceid --output text --query 'Reservations[*].Instances[*].State.Name'); test "$state" = "stopping"; do
+						sleep 1; echo -n '.'
+						done; echo " $state"
+					num_version=$(aws ec2 describe-images --filters "Name=tag:Name,Values=${imageName}_*" --query 'reverse(sort_by(Images, &CreationDate))[0].Name' | awk -F'_' '{print $4}' | awk -F'"' '{print $1}')
+					sum=$(($num_version + 1))
+					amiID=$(aws ec2 create-image --instance-id $deployinstanceid --name ${imageName}_$sum --description ${imageName}_$sum --output text)
+					echo $amiID
+					export AMIID=$amiID
+					aws ec2 create-tags --resources ${amiID} --tags Key=Name,Value=${imageName}_$sum
+					cat <<EOF > launch_template.json
+{"ImageId":"${amiID}", "InstanceType":"${instance_type}", "KeyName":"${key_name}", "SecurityGroupIds":[${security_group_ids}]}
+EOF
+                    aws ec2 create-launch-template-version --launch-template-id ${launch_template_id} --version-description latest_deploy --launch-template-data file://${WORKSPACE}/launch_template.json
+					while amiState=$(aws ec2 describe-images --image-ids ${AMIID} --query 'Images[*].State' --output text); test "$amiState" = "pending"; do sleep 1; echo -n '.'; done; echo " $amiState"
+				'''
+				script { 
+					if (params.DEPLOY_SL == true) {
+							sh label: '#### Trigger Services Layer ####', script: """
+                                        curl -XPOST -u "jenkins@enhanceit.com:123456789" "https://jenkinswin.enhanceit.com/view/country/job/country_environment/job/JObName/buildWithParameters?token=123456789&TAG=${params.TAG_SL}&WEB_CONFIG_TO_USE=Web.environment.config" --insecure
+                            """
+					} else {
+							sh label: '#### Trigger Services Layer ####', script: """
+											echo 'Selected No'
+							"""	
+					}
+				}
+			}
+			post {
+				failure {
+					slackSend baseUrl: 'https://enhanceit.slack.com/services/hooks/jenkins-ci/', color: "danger", message: "${JOB_NAME} - #${BUILD_NUMBER} - Failure after ${currentBuild.durationString.replace(' and counting', '')} on PRE DEPLOY AWS Step (<${RUN_DISPLAY_URL}|Open>)", teamDomain: 'enhanceit', token: '123456789'
+				}
+				unstable {
+					slackSend baseUrl: 'https://enhanceit.slack.com/services/hooks/jenkins-ci/', color: "warning", message: "${JOB_NAME} - #${BUILD_NUMBER} - Unstable after ${currentBuild.durationString.replace(' and counting', '')} on PRE DEPLOY AWS Step (<${RUN_DISPLAY_URL}|Open>)", teamDomain: 'enhanceit', token: '123456789'
+				}
+				aborted {
+						slackSend baseUrl: 'https://enhanceit.slack.com/services/hooks/jenkins-ci/', color: '#A9A9A9', message: "${JOB_NAME} - #${BUILD_NUMBER} - Aborted after ${currentBuild.durationString.replace(' and counting', '')} on PRE DEPLOY AWS Step by user ${USER} (<${RUN_DISPLAY_URL}|Open>)", teamDomain: 'enhanceit', token: '123456789'
+				}
+			}
+		}
+        stage('Deploy') {   
+			steps {
+				script { 
+					if (params.DEPLOY_SL == true) {
+							sh '''#!/bin/bash \n
+								return_code=1; while [ $return_code -ne 0 ]; do JOB_STATUS=$(curl --silent -u "jenkins@enhanceit.com:123456789" "https://jenkinswin.enhanceit.com/view/country/job/country_environment/job/country_ServicesLayer_Deploy_PROD_Pipeline/lastBuild/api/json" --insecure | awk -F'result":"' '{print $2}' | awk -F'","timestamp"' '{print $1}') ; if [ $JOB_STATUS == 'SUCCESS' ]; then return_code=0; elif [ $JOB_STATUS == 'FAILURE' ]; then exit 1 ; else return_code=1 ; fi; done; echo "Build finished"
+							'''
+					} else {
+							sh label: '#### Trigger Services Layer ####', script: """
+											echo 'Selected No'
+							"""	
+					}
+				}
+				sh label: '#### Check Healthy Instances ####', script: """
+					ansible -i inventory ${ansible_host_deploy_block_one} -m shell -a 'echo Ready to Deploy' -u ec2-user
+				"""
+				sh label: '#### Check Healthy Instances ####', script: """
+					ansible -i inventory ${ansible_host_deploy_block_two} -m shell -a 'echo Ready to Deploy' -u ec2-user
+				"""
+				sh label: '#### Download Package from S3 (GIT) ####', script: """
+				  ansible -i inventory ${ansible_host_deploy_block_one} -a 'aws s3 cp s3://${s3bucketname}/${s3key}/JenkinsJob_${JOB_BASE_NAME}_Run_${BUILD_NUMBER}_Branch_${params.TAG}.tar.gz ${repoHome}/JenkinsJob_${JOB_BASE_NAME}_Run_${BUILD_NUMBER}_Branch_${params.TAG}.tar.gz' -u ec2-user
+				"""
+				sh label: '#### Uncompress Package (GIT) ####', script: """
+				  ansible -i inventory ${ansible_host_deploy_block_one} -a 'tar -xvzf ${repoHome}/JenkinsJob_${JOB_BASE_NAME}_Run_${BUILD_NUMBER}_Branch_${params.TAG}.tar.gz -C ${repoHome}/' -u ec2-user
+				"""
+				sh label: '#### Remove Package from destination (GIT) ####', script: """
+				  ansible -i inventory ${ansible_host_deploy_block_one} -a 'rm -f ${repoHome}/JenkinsJob_${JOB_BASE_NAME}_Run_${BUILD_NUMBER}_Branch_${params.TAG}.tar.gz' -u ec2-user
+				"""
+				sh label: '#### Download Package from S3 (CSS JS)####', script: """
+				  ansible -i inventory ${ansible_host_deploy_block_one} -a 'aws s3 cp s3://${s3bucketname}/${s3key}/JenkinsJob_${JOB_BASE_NAME}_Run_${BUILD_NUMBER}_Branch_${params.TAG}_CSS_JS.tar.gz path/html/skin/JenkinsJob_${JOB_BASE_NAME}_Run_${BUILD_NUMBER}_Branch_${params.TAG}_CSS_JS.tar.gz' -u ec2-user
+				"""
+				sh label: '#### Uncompress Package (CSS JS) ####', script: """
+				  ansible -i inventory ${ansible_host_deploy_block_one} -a 'tar -xvzf path/html/skin/JenkinsJob_${JOB_BASE_NAME}_Run_${BUILD_NUMBER}_Branch_${params.TAG}_CSS_JS.tar.gz -C path/html/skin/' -u ec2-user
+				"""
+				sh label: '#### Remove Package from destination (CSS JS) ####', script: """
+				  ansible -i inventory ${ansible_host_deploy_block_one} -a 'rm -f path/html/skin/JenkinsJob_${JOB_BASE_NAME}_Run_${BUILD_NUMBER}_Branch_${params.TAG}_CSS_JS.tar.gz' -u ec2-user
+				"""
+				sh label: '#### Stop Nginx ####', script: """
+					ansible -i inventory ${ansible_host_deploy_block_one} -m shell -a 'if [ -f path/logs/nginx.pid ]; then sudo path/sbin/nginx -s stop && sudo rm -rf /var/ngx_pagespeed_cache/*; fi' -u ec2-user
+				"""
+				sh label: '#### Restart Php-fpm ####', script: """
+				  ansible -i inventory ${ansible_host_deploy_block_one} -m service -a "name=php-fpm state=restarted" -u ec2-user
+				"""
+				sh label: '#### Delete Folders ####', script: """
+				  ansible -i inventory ${ansible_host_deploy_block_one} -m shell -a 'cd ${rootWebDocument} && if [ -d app ]; then rm -rf app; fi && if [ -d downloader ]; then rm -rf downloader; fi && if [ -d images ]; then rm -rf images; fi && if [ -d includes ]; then rm -rf includes; fi && if [ -d js ]; then rm -rf js; fi && if [ -d lib ]; then rm -rf lib; fi && if [ -d shell ]; then rm -rf shell; fi && if [ -d skin ]; then rm -rf skin; fi' -u ec2-user
+				"""
+				sh label: '#### Copy from Magento to Html ####', script: """
+				  ansible -i inventory ${ansible_host_deploy_block_one} -m shell -a 'cp -a ${repoHome}/htdocs/. ${rootWebDocument}' -u ec2-user
+				"""
+				sh label: '#### Copy Config ####', script: """
+				  ansible -i inventory ${ansible_host_deploy_block_one} -m shell -a 'cp ${nginxPath}/localconfigs/${local_xml} ${rootWebDocument}/app/etc/local.xml' -u ec2-user
+				"""
+				sh label: '#### Delete Cache ####', script: """
+				  ansible -i inventory ${ansible_host_deploy_block_one} -m shell -a 'if [ -d ${cachePath} ]; then cd ${cachePath} && rm -rf ./*; fi' -u ec2-user
+				"""
+				sh label: '#### Change Permissions ####', script: """
+				  ansible -i inventory ${ansible_host_deploy_block_one} -m shell -a 'chmod 755 ${rootWebDocument}/cron.php && chmod 755 ${rootWebDocument}/cron.sh && sudo chmod +x ${rootWebDocument}/cron.php && sudo chmod +x ${rootWebDocument}/cron.sh' -u ec2-user
+				"""
+				sh label: '#### First Script Minification - Dart-Sass ####', script: """
+				  ansible -i inventory ${ansible_host_deploy_block_one} -m shell -a 'sh ${toolsPath_media}/dart-sass-script.sh ${dirrepo_dartsass}' -u ec2-user
+				"""
+				sh label: '#### MySQL Query Build ####', script: """
+				cat <<EOF > mysql_query
+UPDATE core_config_data SET core_config_data.VALUE = '${params.CSSJS_VERSION}' WHERE core_config_data.path = 'enhanceit_version/suffix_js_css/suffix';
+EOF
+				"""
+				sh label: '#### MySQL Query - Copy to Endpoint ####', script: """
+				   ansible -i inventory ${ansible_host_deploy_block_one} -m copy -a "src=${WORKSPACE}/mysql_query dest=${toolsPath_media}/" -u ec2-user  
+				"""							  
+				sh label: '#### Versioning - CSS & JS ####', script: """
+				  ansible -i inventory ${ansible_host_deploy_block_one} -m shell -a 'sudo mysql -h endpoint -u user -ppass dbname < ${toolsPath_media}/mysql_query' -u ec2-user
+				"""
+				sh label: '#### Check Versioning Value - CSS & JS ####', script: """
+				  ansible -i inventory ${ansible_host_deploy_block_one} -m shell -a 'sudo mysql -h endpoint -u user -ppass dbname -e "select value from core_config_data where config_id in(908);" | grep ${params.CSSJS_VERSION}' -u ec2-user
+				"""
+				sh label: '#### Clean Cache - REDIS ####', script: """
+				  ansible -i inventory ${ansible_host_deploy_block_one} -m shell -a 'sudo /usr/local/bin/redis-cli -h redisendpoint -p 6379 flushall' -u ec2-user
+				"""
+				sh label: '#### Clean Cache - CSS & JS ####', script: """
+				  ansible -i inventory ${ansible_host_deploy_block_one} -m shell -a 'sudo rm -f path/html/media/css_secure/* ; sudo rm -f path/html/media/js/*' -u ec2-user
+				"""
+				sh label: '#### Start Nginx ####', script: """
+				  ansible -i inventory ${ansible_host_deploy_block_one} -m shell -a 'sudo path/sbin/nginx' -u ec2-user
+				"""
+				
+				sleep 260
+				
+				sh label: '#### Check Healthy Instances ####', script: """
+					ansible -i inventory ${ansible_host_deploy_block_two} -m shell -a 'echo Ready to Deploy' -u ec2-user
+				"""
+				sh label: '#### Download Package from S3 (GIT) ####', script: """
+				  ansible -i inventory ${ansible_host_deploy_block_two} -a 'aws s3 cp s3://${s3bucketname}/${s3key}/JenkinsJob_${JOB_BASE_NAME}_Run_${BUILD_NUMBER}_Branch_${params.TAG}.tar.gz ${repoHome}/JenkinsJob_${JOB_BASE_NAME}_Run_${BUILD_NUMBER}_Branch_${params.TAG}.tar.gz' -u ec2-user
+				"""
+				sh label: '#### Uncompress Package (GIT) ####', script: """
+				  ansible -i inventory ${ansible_host_deploy_block_two} -a 'tar -xvzf ${repoHome}/JenkinsJob_${JOB_BASE_NAME}_Run_${BUILD_NUMBER}_Branch_${params.TAG}.tar.gz -C ${repoHome}/' -u ec2-user
+				"""
+				sh label: '#### Remove Package from destination (GIT) ####', script: """
+				  ansible -i inventory ${ansible_host_deploy_block_two} -a 'rm -f ${repoHome}/JenkinsJob_${JOB_BASE_NAME}_Run_${BUILD_NUMBER}_Branch_${params.TAG}.tar.gz' -u ec2-user
+				"""
+				sh label: '#### Download Package from S3 (CSS JS)####', script: """
+				  ansible -i inventory ${ansible_host_deploy_block_two} -a 'aws s3 cp s3://${s3bucketname}/${s3key}/JenkinsJob_${JOB_BASE_NAME}_Run_${BUILD_NUMBER}_Branch_${params.TAG}_CSS_JS.tar.gz path/html/skin/JenkinsJob_${JOB_BASE_NAME}_Run_${BUILD_NUMBER}_Branch_${params.TAG}_CSS_JS.tar.gz' -u ec2-user
+				"""
+				sh label: '#### Uncompress Package (CSS JS) ####', script: """
+				  ansible -i inventory ${ansible_host_deploy_block_two} -a 'tar -xvzf path/html/skin/JenkinsJob_${JOB_BASE_NAME}_Run_${BUILD_NUMBER}_Branch_${params.TAG}_CSS_JS.tar.gz -C path/html/skin/' -u ec2-user
+				"""
+				sh label: '#### Remove Package from destination (CSS JS) ####', script: """
+				  ansible -i inventory ${ansible_host_deploy_block_two} -a 'rm -f path/html/skin/JenkinsJob_${JOB_BASE_NAME}_Run_${BUILD_NUMBER}_Branch_${params.TAG}_CSS_JS.tar.gz' -u ec2-user
+				"""
+				sh label: '#### Stop Nginx ####', script: """
+					ansible -i inventory ${ansible_host_deploy_block_two} -m shell -a 'if [ -f path/logs/nginx.pid ]; then sudo path/sbin/nginx -s stop && sudo rm -rf /var/ngx_pagespeed_cache/*; fi' -u ec2-user
+				"""
+				sh label: '#### Restart Php-fpm ####', script: """
+				  ansible -i inventory ${ansible_host_deploy_block_two} -m service -a "name=php-fpm state=restarted" -u ec2-user
+				"""
+				sh label: '#### Delete Folders ####', script: """
+				  ansible -i inventory ${ansible_host_deploy_block_two} -m shell -a 'cd ${rootWebDocument} && if [ -d app ]; then rm -rf app; fi && if [ -d downloader ]; then rm -rf downloader; fi && if [ -d images ]; then rm -rf images; fi && if [ -d includes ]; then rm -rf includes; fi && if [ -d js ]; then rm -rf js; fi && if [ -d lib ]; then rm -rf lib; fi && if [ -d shell ]; then rm -rf shell; fi && if [ -d skin ]; then rm -rf skin; fi' -u ec2-user
+				"""
+				sh label: '#### Copy from Magento to Html ####', script: """
+				  ansible -i inventory ${ansible_host_deploy_block_two} -m shell -a 'cp -a ${repoHome}/htdocs/. ${rootWebDocument}' -u ec2-user
+				"""
+				sh label: '#### Copy Config ####', script: """
+				  ansible -i inventory ${ansible_host_deploy_block_two} -m shell -a 'cp ${nginxPath}/localconfigs/${local_xml} ${rootWebDocument}/app/etc/local.xml' -u ec2-user
+				"""
+				sh label: '#### Delete Cache ####', script: """
+				  ansible -i inventory ${ansible_host_deploy_block_two} -m shell -a 'if [ -d ${cachePath} ]; then cd ${cachePath} && rm -rf ./*; fi' -u ec2-user
+				"""
+				sh label: '#### Change Permissions ####', script: """
+				  ansible -i inventory ${ansible_host_deploy_block_two} -m shell -a 'chmod 755 ${rootWebDocument}/cron.php && chmod 755 ${rootWebDocument}/cron.sh && sudo chmod +x ${rootWebDocument}/cron.php && sudo chmod +x ${rootWebDocument}/cron.sh' -u ec2-user
+				"""
+				sh label: '#### First Script Minification - Dart-Sass ####', script: """
+				  ansible -i inventory ${ansible_host_deploy_block_two} -m shell -a 'sh ${toolsPath_media}/dart-sass-script.sh ${dirrepo_dartsass}' -u ec2-user
+				"""
+				sh label: '#### MySQL Query Build ####', script: """
+				cat <<EOF > mysql_query
+UPDATE core_config_data SET core_config_data.VALUE = '${params.CSSJS_VERSION_2}' WHERE core_config_data.path = 'enhanceit_version/suffix_js_css/suffix';
+EOF
+				"""
+				sh label: '#### MySQL Query - Copy to Endpoint ####', script: """
+				   ansible -i inventory ${ansible_host_deploy_block_two} -m copy -a "src=${WORKSPACE}/mysql_query dest=${toolsPath_media}/" -u ec2-user  
+				"""							  
+				sh label: '#### Versioning - CSS & JS ####', script: """
+				  ansible -i inventory ${ansible_host_deploy_block_two} -m shell -a 'sudo mysql -h endpoint -u user -ppass dbname < ${toolsPath_media}/mysql_query' -u ec2-user
+				"""
+				sh label: '#### Check Versioning Value - CSS & JS ####', script: """
+				  ansible -i inventory ${ansible_host_deploy_block_two} -m shell -a 'sudo mysql -h endpoint -u user -ppass dbname -e "select value from core_config_data where config_id in(908);" | grep ${params.CSSJS_VERSION_2}' -u ec2-user
+				"""
+				sh label: '#### Clean Cache - REDIS ####', script: """
+				  ansible -i inventory ${ansible_host_deploy_block_two} -m shell -a 'sudo /usr/local/bin/redis-cli -h redisendpoint -p 6379 flushall' -u ec2-user
+				"""
+				sh label: '#### Clean Cache - CSS & JS ####', script: """
+				  ansible -i inventory ${ansible_host_deploy_block_two} -m shell -a 'sudo rm -f path/html/media/css_secure/* ; sudo rm -f path/html/media/js/*' -u ec2-user
+				"""
+				sh label: '#### Start Nginx ####', script: """
+				  ansible -i inventory ${ansible_host_deploy_block_two} -m shell -a 'sudo path/sbin/nginx' -u ec2-user
+				"""
+			}
+			post {
+				failure {
+					slackSend baseUrl: 'https://enhanceit.slack.com/services/hooks/jenkins-ci/', color: "danger", message: "${JOB_NAME} - #${BUILD_NUMBER} - Failure after ${currentBuild.durationString.replace(' and counting', '')} on DEPLOY Step (<${RUN_DISPLAY_URL}|Open>)", teamDomain: 'enhanceit', token: '123456789'
+				}
+				unstable {
+					slackSend baseUrl: 'https://enhanceit.slack.com/services/hooks/jenkins-ci/', color: "warning", message: "${JOB_NAME} - #${BUILD_NUMBER} - Unstable after ${currentBuild.durationString.replace(' and counting', '')} on DEPLOY Step (<${RUN_DISPLAY_URL}|Open>)", teamDomain: 'enhanceit', token: '123456789'
+				}
+				aborted {
+						slackSend baseUrl: 'https://enhanceit.slack.com/services/hooks/jenkins-ci/', color: '#A9A9A9', message: "${JOB_NAME} - #${BUILD_NUMBER} - Aborted after ${currentBuild.durationString.replace(' and counting', '')} on DEPLOY Step by user ${USER} (<${RUN_DISPLAY_URL}|Open>)", teamDomain: 'enhanceit', token: '123456789'
+				}
+			}
+		}
+		stage('Post Deploy AWS') {
+			steps {
+				sh label: '#### Create JSON for Maintaining Landing  - Route 53  ####', script: """
+					cat <<EOF > post_deploy_route53.json
+{"Comment": "Post Deploy", "Changes": [{ "Action": "UPSERT", "ResourceRecordSet": {"Name": "${dns_primary}", "Type": "A", "AliasTarget": {"HostedZoneId": "${lb_aliashostedzoneid}", "DNSName": "${lb_dns}", "EvaluateTargetHealth": false}}}, { "Action": "UPSERT", "ResourceRecordSet": {"Name": "${dns_secondary}", "Type": "A", "AliasTarget": {"HostedZoneId": "${lb_aliashostedzoneid}", "DNSName": "${lb_dns}", "EvaluateTargetHealth": false}}}]}
+EOF
+				"""
+				sh label: '#### Landing Mantenimiento - Route 53  ####', script: """
+					if [ -f ${WORKSPACE}/post_deploy_route53.json ]; then echo Ready to change DNS; else exit 1 ;fi
+				"""
+				sleep 120
+				sh label: '#### Remove new EC2 with min 2 max 4 - Auto Scaling Group  ####', script: """
+					aws autoscaling update-auto-scaling-group --auto-scaling-group-name ${autoscaling_group} --launch-template '{"LaunchTemplateName": "${launchtemplatename}","Version": "\$Latest"}' --min-size 7 --max-size 7 --desired-capacity 7 --vpc-zone-identifier ${vpczoneidentifier}
+				"""
+				sh label: '#### Resume Scaling Policies - Auto Scaling Group  ####', script: """
+					aws autoscaling resume-processes --auto-scaling-group-name ${autoscaling_group} --scaling-processes AlarmNotification
+				"""
+				sh label: '#### Change Alarm state  ####', script: """
+					aws cloudwatch set-alarm-state --alarm-name ${cloudwatch_alarm_1} --state-value OK --state-reason "Deploy"
+				"""
+				sh label: '#### Change Alarm state  ####', script: """
+                    aws cloudwatch set-alarm-state --alarm-name ${cloudwatch_alarm_2} --state-value OK --state-reason "Deploy"
+				"""
+				sh label: '#### Enable Alarms  ####', script: """
+                    aws cloudwatch enable-alarm-actions --alarm-names ${cloudwatch_alarm_1} ${cloudwatch_alarm_2}
+				"""
+			}
+			post {
+				failure {
+					slackSend baseUrl: 'https://enhanceit.slack.com/services/hooks/jenkins-ci/', color: "danger", message: "${JOB_NAME} - #${BUILD_NUMBER} - Failure after ${currentBuild.durationString.replace(' and counting', '')} on POST DEPLOY AWS Step (<${RUN_DISPLAY_URL}|Open>)", teamDomain: 'enhanceit', token: '123456789'
+				}
+				unstable {
+					slackSend baseUrl: 'https://enhanceit.slack.com/services/hooks/jenkins-ci/', color: "warning", message: "${JOB_NAME} - #${BUILD_NUMBER} - Unstable after ${currentBuild.durationString.replace(' and counting', '')} on POST DEPLOY AWS Step (<${RUN_DISPLAY_URL}|Open>)", teamDomain: 'enhanceit', token: '123456789'
+				}
+				aborted {
+						slackSend baseUrl: 'https://enhanceit.slack.com/services/hooks/jenkins-ci/', color: '#A9A9A9', message: "${JOB_NAME} - #${BUILD_NUMBER} - Aborted after ${currentBuild.durationString.replace(' and counting', '')} on POST DEPLOY AWS Step by user ${USER} (<${RUN_DISPLAY_URL}|Open>)", teamDomain: 'enhanceit', token: '123456789'
+				}
+			}
+		}
+		stage('End') {
+			steps {
+				echo "SUCCESS"
+				script {
+                    currentBuild.displayName = "#${BUILD_NUMBER}"
+                    currentBuild.description = "RELEASE: ${params.TAG}"
+                }
+			}
+			post {
+				success {
+					slackSend baseUrl: 'https://enhanceit.slack.com/services/hooks/jenkins-ci/', color: "good", message: "${JOB_NAME} - #${BUILD_NUMBER} - Success after ${currentBuild.durationString.replace(' and counting', '')} (<${RUN_DISPLAY_URL}|Open>)", teamDomain: 'enhanceit', token: '123456789'
+					slackSend baseUrl: 'https://enhanceit.slack.com/services/hooks/jenkins-ci/', channel: 'pasaje-a-produccion', color: "good", failOnError: true, message: "FIN Pasaje a Produccion - country (Magento & SL) - TAG: ${params.TAG} - Duracion ${currentBuild.durationString.replace(' and counting', '')} - (<${RUN_DISPLAY_URL}|Open_Pipeline>)", teamDomain: 'enhanceit', token: '123456789'
+				}
+				failure {
+					slackSend baseUrl: 'https://enhanceit.slack.com/services/hooks/jenkins-ci/', color: "danger", message: "${JOB_NAME} - #${BUILD_NUMBER} - Failure after ${currentBuild.durationString.replace(' and counting', '')} (<${RUN_DISPLAY_URL}|Open>)", teamDomain: 'enhanceit', token: '123456789'
+				}
+				unstable {
+					slackSend baseUrl: 'https://enhanceit.slack.com/services/hooks/jenkins-ci/', color: "warning", message: "${JOB_NAME} - #${BUILD_NUMBER} - Unstable after ${currentBuild.durationString.replace(' and counting', '')} (<${RUN_DISPLAY_URL}|Open>)", teamDomain: 'enhanceit', token: '123456789'
+				}
+				aborted {
+						slackSend baseUrl: 'https://enhanceit.slack.com/services/hooks/jenkins-ci/', color: '#A9A9A9', message: "${JOB_NAME} - #${BUILD_NUMBER} - Aborted after ${currentBuild.durationString.replace(' and counting', '')} by user ${USER} (<${RUN_DISPLAY_URL}|Open>)", teamDomain: 'enhanceit', token: '123456789'
+				}
+			}
+		}
+	}   
+}

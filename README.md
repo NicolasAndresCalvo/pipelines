@@ -1,1 +1,1 @@
-This is a repository for sharing different pipelines.
+Repository created for sharing pipelines created for my company EnhanceIT.
